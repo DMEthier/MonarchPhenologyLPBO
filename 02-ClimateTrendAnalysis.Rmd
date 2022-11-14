@@ -1,0 +1,82 @@
+---
+title: "03-SupplementalAnalysis"
+author: "Danielle Ethier"
+date: "09/07/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages}
+
+require(tidyverse)  
+require(psych)
+require(mgcv)
+require(lmtest)
+require(RNCEP)
+
+detach("package:plyr", unload=TRUE) #if this was previously loaded it will cause a headache. 
+ 
+```
+
+##Import data and select desired covariates
+
+```{r import data}
+
+dat<-read.csv("Monarch.data.2021.csv")
+
+dat<-dat %>% select(survey_year, June_temp, July_temp, August_temp, September_temp, October_temp, Summer_temp, Summer_temp, June_precip, July_precip, August_precip, September_precip, October_precip, Summer_precip)
+
+```
+
+#Model Weather with Time (year)
+
+Look to see if there has been a significant linear change in weather over time. Hint: there is no pattern in any of our weather covariates. 
+
+```{r weather model}
+
+JuneT<-lm(June_temp~survey_year, data=dat)
+summary(JuneT)
+
+JulyT<-lm(July_temp~survey_year, data=dat)
+summary(JulyT)
+
+AugT<-lm(August_temp~survey_year, data=dat)
+summary(AugT)
+
+SeptT<-lm(September_temp~survey_year, data=dat)
+summary(SeptT)
+
+OctT<-lm(October_temp~survey_year, data=dat)
+summary(OctT)
+
+JuneP<-lm(June_precip~survey_year, data=dat)
+summary(JuneP)
+
+JulyP<-lm(July_precip~survey_year, data=dat)
+summary(JulyP)
+
+AugP<-lm(August_precip~survey_year, data=dat)
+summary(AugP)
+
+ggplot(dat, aes (x=survey_year, y=August_precip)) +
+  geom_point() +
+  geom_smooth(method ="lm") + 
+  xlab("Survey Year") +
+  ylab("August Precipitation") +
+  theme_classic()
+
+SeptP<-lm(September_precip~survey_year, data=dat)
+summary(SeptP)
+
+OctP<-lm(October_precip~survey_year, data=dat)
+summary(OctP)
+
+```
+

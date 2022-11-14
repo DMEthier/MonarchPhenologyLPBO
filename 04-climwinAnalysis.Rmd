@@ -1,0 +1,745 @@
+---
+title: "04-climwn"
+author: "Danielle Ethier"
+date: "28/07/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r library, include=FALSE}
+
+require(climwin)
+require(tidyverse)
+require(lubridate)
+
+```
+
+Prepare the data for analysis
+
+```{r data, include=FALSE}
+#upload data
+mobu<-read.csv("Monarch.data.2021.csv")
+
+#keep just the response variables. Remove all the old month means that we are no longer using. 
+mobu<-mobu %>% select(survey_year, mean.date, weighted.sd, sd.low, sd.high, quant90, doy_abund50, doy_peak1, doy_peakmean)
+
+#climwin package is picky about the date structure 
+mobu$mean.date<-as.integer(mobu$mean.date, length=1)
+mobu$sd.low<-as.integer(mobu$sd.low, length=1)
+mobu$sd.high<-as.integer(mobu$sd.high, length=1)  
+mobu$quant90<-as.integer(mobu$quant90, length=1)
+mobu$doy_abund50<-as.integer(mobu$doy_abund50, length=1)
+mobu$doy_peak1<-as.integer(mobu$doy_peak1, length=1)
+mobu$doy_peakmean<-as.integer(mobu$doy_peakmean, length=1)
+
+#need to assign as.Date to the doy response variable
+
+#mean
+origin=paste(mobu$survey_year,"/1/1", sep="")
+mobu$date.mean<-as.Date(mobu$mean.date, origin=origin)
+mobu$date.mean <- format(mobu$date.mean, format="%d/%m/%Y") 
+mobu$date.mean<-as.factor(mobu$date.mean)
+
+#sd.low
+mobu$date.low<-as.Date(mobu$sd.low, origin=origin)
+mobu$date.low <- format(mobu$date.low, format="%d/%m/%Y")
+mobu$date.low<-as.factor(mobu$date.low)
+
+#sd.high
+mobu$date.high<-as.Date(mobu$sd.high, origin=origin)
+mobu$date.high <- format(mobu$date.high, format="%d/%m/%Y") 
+mobu$date.high<-as.factor(mobu$date.high)
+
+#90quant
+mobu$date.quant<-as.Date(mobu$quant90, origin=origin)
+mobu$date.quant <- format(mobu$date.quant, format="%d/%m/%Y") 
+mobu$date.quant<-as.factor(mobu$date.quant)
+
+#doy_abund50
+mobu$doy.abund50<-as.Date(mobu$doy_abund50, origin=origin)
+mobu$doy.abund50 <- format(mobu$doy.abund50, format="%d/%m/%Y") 
+mobu$doy.abund50<-as.factor(mobu$doy.abund50)
+
+#doy_peak1
+mobu$doy.peak1<-as.Date(mobu$doy_peak1, origin=origin)
+mobu$doy.peak1 <- format(mobu$doy.peak1, format="%d/%m/%Y") 
+mobu$doy.peak1<-as.factor(mobu$doy.peak1)
+
+#doy_peakmean
+mobu$doy.peakmean<-as.Date(mobu$doy_peakmean, origin=origin)
+mobu$doy.peakmean <- format(mobu$doy.peakmean, format="%d/%m/%Y") 
+mobu$doy.peakmean<-as.factor(mobu$doy.peakmean)
+
+cov<-read.csv("Daily weather.csv") #see 00-WeatherDownload2.Rmd
+
+cov$date<-as.factor(cov$date)
+
+```
+
+Remove collinear covariates to save computation time
+
+```{r colinear}
+
+corr_response <- cov[, 4:10]
+# Plot correlation matrix
+pairs(corr_response)
+cor(corr_response)
+psych::pairs.panels(corr_response)
+
+#retain uncorrelated predictors
+cov<-cov %>% select(date, air_mean, air_var, gdd, precip_sum)
+cov$survey_year<-format(as.Date(cov$date, format="%d/%m/%Y"), "%Y")
+
+```
+
+
+weighted.mean 
+```{r baseline, echo=FALSE}
+
+#refday is the last day the mean response was observed. 
+#For weighted.mean this is Sept 24 (doy = 266)
+#Change reef day to Oct 31 based on reviewer comment. 
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 266-152
+#Range 114
+#If Oct 31, Range 151
+
+slid<-slidingwin(baseline=lm(mean.date~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$date.mean, type = "absolute", refday=c(31, 10), range=c(151,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occuring by chance. If PC<0.5 we consider it a real climate singal.  
+
+randomized1<-randwin(repeats = 25,     
+                     baseline = lm(mean.date~1, data = mobu),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.mean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+#spurious result
+
+randomized2<-randwin(repeats = 25,     
+                     baseline = lm(mean.date~1, data = mobu),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.mean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized2[[1]], dataset = slid[[2]]$Dataset, metric = "C", sample.size = 47)
+#spurious result
+
+randomized3<-randwin(repeats = 25,     
+                     baseline = lm(mean.date~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.mean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[3]]$Dataset, metric = "C", sample.size = 47)
+#spurious result
+
+randomized4<-randwin(repeats = 25,     
+                     baseline = lm(mean.date~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.mean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[4]]$Dataset, metric = "C", sample.size = 47)
+#spurious result
+
+```
+
+weighted.sd low  
+
+```{r baseline, echo=FALSE}
+
+#refday is the last day the sd.low response was observed. 
+#For weighted.mean this is sep 6 (doy = 249)
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 249-152
+#Range 97
+
+slid<-slidingwin(baseline=lm(sd.low~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$date.low, type = "absolute", refday=c(6, 9), range=c(97,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occuring by chance. If PC<0.5 we consider it a real climate singal.  
+
+randomized1<-randwin(repeats = 10,     
+                     baseline = lm(sd.low~1, data = mobu),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(97,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(6, 9),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.low, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+
+randomized2<-randwin(repeats = 10,     
+                     baseline = lm(sd.low~1, data = mobu),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(97,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(6, 9),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date, 
+			    window= "sliding")
+
+randomized3<-randwin(repeats = 10,     
+                     baseline = lm(sd.low~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(97,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(6, 9),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.low, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 10,     
+                     baseline = lm(sd.low~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(97,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(6, 9),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.low, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+```
+
+weighted.sd high  
+
+```{r baseline, echo=FALSE}
+
+#refday is the last day the sd.high response was observed. 
+#For weighted.mean this is Oct 10 (doy = 282)
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 282-152
+#Range 130
+
+slid<-slidingwin(baseline=lm(sd.high~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$date.high, type = "absolute", refday=c(10, 10), range=c(130,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occuring by chance. If PC<0.5 we consider it a real climate singal.  
+
+randomized1<-randwin(repeats = 10,     
+                     baseline = lm(sd.high~1, data = mobu),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(130,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(10, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.high, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+
+#randomized2<-randwin(repeats = 10,     
+#                     baseline = lm(sd.high~1, data = mobu),
+#                     xvar = list(GDD=cov$gdd),
+#                     type = "absolute", 
+#                     range=c(130,0),
+#                     stat = c("mean"),
+#                     func = c("lin"),
+#                     refday=c(10, 10),
+#                     cinterval = "day",
+#                     cdate=cov$date, bdate=mobu$date.high, 
+#			    window= "sliding")
+
+randomized3<-randwin(repeats = 10,     
+                     baseline = lm(sd.high~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(130,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(10, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.high, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 10,     
+                     baseline = lm(sd.high~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(130,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(10, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$date.high, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+```
+
+quant90
+```{r baseline, echo=FALSE}
+
+#unrealiable data in these years for estimating end of season flight
+mobu1<-mobu %>% filter(survey_year!=2019)
+mobu1<-mobu1 %>% filter(survey_year!=2014)
+
+#refday is the last day the mean response was observed. 
+#For weighted.mean this is Oct 31 (doy = 303)
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 303-152
+#Range 151
+
+slid<-slidingwin(baseline=lm(quant90~1, data=mobu1), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu1$date.quant, type = "absolute", refday=c(31, 10), range=c(151,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occuring by chance. If PC<0.5 we consider it a real climate singal.  
+
+randomized1<-randwin(repeats = 25,     
+                     baseline = lm(quant90~1, data = mobu1),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu1$date.quant, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized2<-randwin(repeats = 25,     
+                     baseline = lm(quant90~1, data = mobu1),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu1$date.quant, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[2]]$Dataset, metric = "C", sample.size = 47)
+
+randomized3<-randwin(repeats = 25,     
+                     baseline = lm(quant90~1, data = mobu1),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu1$date.quant, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[3]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 25,     
+                     baseline = lm(quant90~1, data = mobu1),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu1$date.quant, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[4]]$Dataset, metric = "C", sample.size = 47)
+
+#Plot the output to identify the candidate climate signal for each hypothesis. 
+
+plotall(datasetrand = randomized1[[1]],
+         dataset = slid[[1]]$Dataset, 
+         bestmodel = slid[[1]]$BestModel,
+         bestmodeldata = slid[[1]]$BestModelData,
+         title=slid$combos[1,])
+
+#get the best window 
+#recall this is relative to the reference day 
+
+slid[[1]]$Dataset[1,]
+```
+
+doy_abund50
+```{r baseline, echo=FALSE}
+
+#refday is the last day the mean response was observed. 
+#For doy_abund50 this is September 6th (doy = 250)
+#Change to Oct 31
+
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 250-152
+#Range 97
+#If Oct 31, Range 151
+
+slid<-slidingwin(baseline=lm(doy_abund50~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$doy.abund50, type = "absolute", refday=c(31,10), range=c(151,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occurring by chance. If PC<0.5 we consider it a real climate signal.  
+
+randomized1<-randwin(repeats = 25,     
+                     baseline = lm(doy_abund50~1, data = mobu),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31,10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.abund50, 
+			    window= "sliding")
+
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized2<-randwin(repeats = 25,     
+                     baseline = lm(doy_abund50~1, data = mobu),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31,10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.abund50, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized2[[1]], dataset = slid[[2]]$Dataset, metric = "C", sample.size = 47)
+
+randomized3<-randwin(repeats = 25,     
+                     baseline = lm(doy_abund50~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31,10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.abund50, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[3]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 25,     
+                     baseline = lm(doy_abund50~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31,10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.abund50, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[4]]$Dataset, metric = "C", sample.size = 47)
+
+#Plot the output to identify the candidate climate signal for each hypothesis. 
+
+#plotall(datasetrand = randomized1[[1]],
+#         dataset = slid[[1]]$Dataset, 
+#         bestmodel = slid[[1]]$BestModel,
+#         bestmodeldata = slid[[1]]$BestModelData,
+#         title=slid$combos[1,])
+
+#get the best window 
+#recall this is relative to the reference day 
+
+slid[[1]]$Dataset[1,]
+```
+
+doy_peak1
+```{r baseline, echo=FALSE}
+
+#refday is the last day the mean response was observed. 
+#For doy_peak1 this is September 26th (doy = 269)
+#Change to Oct 31
+
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 269-152
+#Range 117
+#If Oct 31, Range 151
+
+slid<-slidingwin(baseline=lm(doy_peak1~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$doy.peak1, type = "absolute", refday=c(31, 10), range=c(151,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occurring by chance. If PC<0.5 we consider it a real climate signal.  
+
+randomized1<-randwin(repeats = 25,     
+                     baseline = lm(doy_peak1~1, data = mobu),
+                     xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peak1, 
+			    window= "sliding")
+
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized2<-randwin(repeats = 25,     
+                     baseline = lm(doy_peak1~1, data = mobu),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(152,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peak1, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized2[[1]], dataset = slid[[2]]$Dataset, metric = "C", sample.size = 47)
+
+randomized3<-randwin(repeats = 25,     
+                     baseline = lm(doy_peak1~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peak1, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[3]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 25,     
+                     baseline = lm(doy_peak1~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peak1, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[4]]$Dataset, metric = "C", sample.size = 47)
+
+#Plot the output to identify the candidate climate signal for each hypothesis. 
+
+#plotall(datasetrand = randomized1[[1]],
+#         dataset = slid[[1]]$Dataset, 
+#         bestmodel = slid[[1]]$BestModel,
+#         bestmodeldata = slid[[1]]$BestModelData,
+#         title=slid$combos[1,])
+
+#get the best window 
+#recall this is relative to the reference day 
+
+slid[[1]]$Dataset[1,]
+```
+
+doy_peakmean
+```{r baseline, echo=FALSE}
+
+#refday is the last day the mean response was observed. 
+#For doy_peakmean this is October 4 (doy = 278)
+#OCtober 31 
+
+#range is the number of days before the refday we want to assess daily weather. 
+#In this case it will be June 1 (doy = 152). 278-152
+#Range 126
+#Range 151 for Oct 31
+
+slid<-slidingwin(baseline=lm(doy_peakmean~1, data=mobu), xvar=list(TempMean=cov$air_mean, GDD=cov$gdd, TempVar=cov$air_var, Rain=cov$precip_sum), cdate=cov$date, bdate=mobu$doy.peakmean, type = "absolute", refday=c(31, 10), range=c(151,0), func="lin", stat="mean", cinterval="day")
+
+slid$combos # to see models
+
+#best supported model for the first hypothesis
+summary(slid[[1]]$BestModel)
+  #sig effect of mean temp 
+summary(slid[[2]]$BestModel)
+  #non-sig effect of GGD
+summary(slid[[3]]$BestModel)
+  #sig effect of temp var
+summary(slid[[4]]$BestModel)
+  #sig effect of precip
+
+#Randomization to assess the likelihood of the signal occurring by chance. If PC<0.5 we consider it a real climate signal.  
+
+randomized1<-randwin(repeats = 25,     
+                     baseline = lm(doy_peakmean~1, data = mobu),               xvar = list(TempMean=cov$air_mean),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peakmean, 
+			    window= "sliding")
+
+
+pvalue(datasetrand = randomized1[[1]], dataset = slid[[1]]$Dataset, metric = "C", sample.size = 47)
+
+randomized2<-randwin(repeats = 25,     
+                     baseline = lm(doy_peakmean~1, data = mobu),
+                     xvar = list(GDD=cov$gdd),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.mean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized2[[1]], dataset = slid[[2]]$Dataset, metric = "C", sample.size = 47)
+
+randomized3<-randwin(repeats = 25,     
+                     baseline = lm(doy_peakmean~1, data = mobu),
+                     xvar = list(TempVar=cov$air_var),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peakmean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized3[[1]], dataset = slid[[3]]$Dataset, metric = "C", sample.size = 47)
+
+randomized4<-randwin(repeats = 25,     
+                     baseline = lm(doy_peakmean~1, data = mobu),
+                     xvar = list(Rain=cov$precip_sum),
+                     type = "absolute", 
+                     range=c(151,0),
+                     stat = c("mean"),
+                     func = c("lin"),
+                     refday=c(31, 10),
+                     cinterval = "day",
+                     cdate=cov$date, bdate=mobu$doy.peakmean, 
+			    window= "sliding")
+
+pvalue(datasetrand = randomized4[[1]], dataset = slid[[4]]$Dataset, metric = "C", sample.size = 47)
+
+#Plot the output to identify the candidate climate signal for each hypothesis. 
+
+#plotall(datasetrand = randomized1[[1]],
+#         dataset = slid[[1]]$Dataset, 
+#         bestmodel = slid[[1]]$BestModel,
+#         bestmodeldata = slid[[1]]$BestModelData,
+#         title=slid$combos[1,])
+
+#get the best window 
+#recall this is relative to the reference day 
+
+slid[[1]]$Dataset[1,]
+```

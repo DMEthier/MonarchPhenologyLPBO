@@ -1,0 +1,654 @@
+---
+title: "01-DataManip"
+author: "Danielle Ethier"
+date: "26/05/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages, message = FALSE, warning = FALSE}
+
+require(naturecounts) #for accessing the monarch data
+require(tidyverse)  
+require(lubridate)
+require(Hmisc) #to calculate the weighted sd
+detach("package:plyr", unload=TRUE) #This should be unloaded if loaded from a different session
+
+```
+
+## Monarch data access and exploration
+
+Fall migration counts of monarchs, collected at the Long Point Bird Observatory (LPBO), are submitted to NatureCounts annually, and can be pulled directly in R using the naturecounts package. In order to do this, you will need to create a free account [https://www.birdscanada.org/birdmon/default/register.jsp] and make a request to the data custodian to release these data. 
+
+For general instructions on how to access data with NatureCounts, please review the following [Introductory Tutorial](https://birdscanada.github.io/NatureCounts_IntroTutorial/). 
+
+collections = "CMMN-LPBO-MOBU"	
+
+Sample code how to download the data are give in the code chunck below. 
+
+```{r MonarchData, message= FALSE, warning=FALSE}
+
+#data<-nc_data_dl(collections="CMMN-LPBO-MOBU", username = "dethier", info ="Monarch data download for migration analysis: 2021")
+
+# Replace username. You will be prompted for your password.
+
+#write.csv(data, "raw.monarch.data.csv") #save a local copy
+#data<-read.csv("raw.monarch.data.csv") #read local copy from your directory
+
+```
+
+##Filter data from 1995-2020
+
+```{r FilterData}
+
+data<-data %>% select(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, ObservationCount) %>% 
+  filter(survey_year >= 1995, survey_year <= 2020) %>% filter(SiteCode!="LPBO3") 
+
+data$ObservationCount<-as.integer(data$ObservationCount)
+
+data<-format_dates(data) #creates date and doy variable
+data<-data %>% filter(doy>200) #remove spring counts from 2003
+
+```
+
+Explore data from both LPBO sites, and LPBO sites combined to determine which is the best for the analysis
+
+##Zerofill matix for the Tip of LPBO
+Make a list of unique sampling dates based on the LPBO DET data to use for zero-filling  dataframe. We assume that is the Tip was operative that missing data are 'zero' rather than NA. 
+
+You will need to request permission for the full LPBO dataset to properly zero fill the data matrix. Sample code given below.
+
+```{r zerofill}
+
+#open<-nc_data_dl(collections="CMMN-DET-LPBO", years=c(1995, 2020), username = "dethier", info ="Create zerofill matrix for monarch migration analysis: 2021")
+
+#write.csv(open, "LPBO-DET-CMMN.csv") #save local copy
+#open<-read.csv("LPBO-DET-CMMN.csv") #read local copy from your directory
+
+open<-open %>% filter(SurveyAreaIdentifier=="LPBO1")
+open<-format_dates(open) #creates date and doy variable
+open<-open %>% filter(doy>213) #remove spring counts 
+
+#create sampling event layer
+event.data <- open %>%
+  filter(ObservationCount > 0) %>%
+  group_by(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, date, doy) %>%
+  mutate(nspecies = n()) %>%
+  filter(nspecies > 1) %>% 
+  select(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, date, doy) %>% 
+  distinct() %>%
+  ungroup() %>%
+  as.data.frame()
+
+#zerofill the data by merging event and real data.  
+data <- left_join(event.data, data, by = c("SamplingEventIdentifier", "SiteCode", "survey_year", "survey_month", "survey_day", "date", "doy")) %>%
+             mutate(
+               ObservationCount = replace(ObservationCount, is.na(ObservationCount), 0))
+
+#Plot raw counts, each year separate
+data0<-data %>% mutate(Obs1=ObservationCount+1)
+ggplot(data0, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw Counts (log)") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+```
+
+Manually filter end of the count season to last flight date based on visual inspections of plot/data prior to generating summary stats. Otherwise, extended zero counts at the tail-end makes the 90th percentile a useless statistic.
+
+```{r endflight}
+
+data<-data %>% filter(!(survey_year==1995 & doy>=292)) %>%
+  filter(!(survey_year==1996 & doy>=296)) %>% 
+  filter(!(survey_year==1997 & doy>=295)) %>%
+  filter(!(survey_year==1998 & doy>=301)) %>% 
+  filter(!(survey_year==1999 & doy>=305)) %>% 
+  filter(!(survey_year==2000 & doy>=307)) %>%
+  filter(!(survey_year==2001 & doy>=293)) %>% 
+  filter(!(survey_year==2002 & doy>=304)) %>%
+  filter(!(survey_year==2003 & doy>=304)) %>%
+  filter(!(survey_year==2004 & doy>=298)) %>% 
+  filter(!(survey_year==2005 & doy>=306)) %>%
+  filter(!(survey_year==2006 & doy>=292)) %>%
+  filter(!(survey_year==2007 & doy>=307)) %>%
+  filter(!(survey_year==2008 & doy>=289)) %>%
+  filter(!(survey_year==2009 & doy>=302)) %>%
+  filter(!(survey_year==2010 & doy>=285)) %>%
+  filter(!(survey_year==2011 & doy>=311)) %>%
+  filter(!(survey_year==2012 & doy>=299)) %>%
+  filter(!(survey_year==2013 & doy>=297)) %>%
+  filter(!(survey_year==2014 & doy>=277)) %>%
+  filter(!(survey_year==2015 & doy>=313)) %>% 
+  filter(!(survey_year==2016 & doy>=290)) %>%
+  filter(!(survey_year==2017 & doy>=307)) %>%
+  filter(!(survey_year==2018 & doy>=312)) %>%
+  filter(!(survey_year==2019 & doy>=297)) %>%
+  filter(!(survey_year==2020 & doy>=284))  
+  
+#Replot raw counts, each year seperate
+data0<-data %>% mutate(Obs1=ObservationCount+1)
+ggplot(data0, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw Counts (log)") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+```
+
+Create the response variables
+
+```{r Response}
+
+#Based on Moussus et al. 2010 the weighted mean doy should provide a robust estimate of yearly migration penology
+
+LPBO1 <- data %>% 
+    filter (SiteCode =="LPBO1") %>% 
+    select(-date) %>%  
+    dplyr::group_by(survey_year) %>%
+    dplyr::summarize (mean.date = weighted.mean(doy, ObservationCount), weighted.var=wtd.var(doy, ObservationCount), quant90 = quantile(doy, probs = 0.90)) %>%     mutate(weighted.sd=sqrt(weighted.var), sd.low = mean.date-weighted.sd, sd.high = mean.date+weighted.sd) 
+
+LPBO1['SiteCode']='LPBO1'
+
+#Plot weighted mean date of migration 
+ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#Plot weighted.sd date of migration 
+ggplot(LPBO1, aes (x=survey_year, y=weighted.sd)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#Plot 90 quant date of migration 
+ggplot(LPBO1, aes (x=survey_year, y=quant90)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#We also included three additional indicators of migration timing, as defined by Culbertson et al. (2021) to ensure our results are maximally comparable. They are (1) migration midpoint, defined as the day by which half of the monarchs counted throughout the migration season have passed Long Point; (2) average peak day, defined as the average of ordinal dates of peak migration days for each season; and (3) first peak migration day of each season. Peak days are calculated based on methods described by Walton et al. (2005)
+
+#First calculate seasonal abundance total
+ObsTot<-data %>% dplyr::group_by(survey_year) %>% dplyr::summarize(ObsCountTotal=sum(ObservationCount), DayCountTot=n_distinct(ObservationCount)) %>% 
+mutate(DailyMean = ObsCountTotal/DayCountTot)
+
+#merge back with main data frame
+data<-left_join(data, ObsTot, by="survey_year")
+
+data<-data %>% mutate(AveDailyPer = (ObservationCount/ObsCountTotal)*100) %>% 
+  arrange(survey_year) %>% 
+  dplyr::group_by(survey_year) %>% 
+  arrange(doy) %>% 
+	mutate(cumulative_sum = cumsum(AveDailyPer), peak=ifelse(AveDailyPer>=4, 1, 0))
+
+#calculate the average annual mean percentage plus the average annual standard deviation 
+mean(data$AveDailyPer) #1.35
+sd(data$AveDailyPer) #2.77
+
+#Plot average daily percent, peak above 4% 
+ggplot(data, aes (x=doy, y=AveDailyPer)) +
+  geom_line() +
+  facet_wrap(survey_year~., scales="free") +
+  geom_hline(yintercept=4)+
+   ylab("Average Daily %") +
+  xlab("Day of Year") +
+  theme_classic()
+
+meanpeak<-data %>% filter(peak==1) %>% 
+  dplyr::group_by(survey_year) %>%
+  dplyr::summarize(meanpeak=mean(doy))
+
+#New response output manually input into a csv for import into R
+resp_new<-read.csv("Monarch_new_response.csv")
+
+#Merge with the original LPBO1 response variables
+LPBO1<-left_join(LPBO1, resp_new, by="survey_year")
+
+#Plot 50% abundance of migration 
+ggplot(LPBO1, aes (x=survey_year, y=doy_abund50)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#Plot first peak of migration 
+ggplot(LPBO1, aes (x=survey_year, y=doy_peak1)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#Plot mean peak of migration 
+ggplot(LPBO1, aes (x=survey_year, y=doy_peakmean)) +
+  geom_point() +
+  geom_smooth(method="lm") +
+# geom_smooth(method="loess") +
+  theme_classic()
+
+#Plot average daily percent, peak above 4% with mean lines vertically. 
+data1<-merge(data, resp_new, by="survey_year")
+
+ggplot(data1, aes (x=doy, y=AveDailyPer)) +
+  geom_line() +
+  facet_wrap(survey_year~., scales="free") +
+  geom_hline(yintercept=4)+
+  geom_vline(data1=data, aes(xintercept = doy_abund50), color="red") +
+  geom_vline(data1=data, aes(xintercept = doy_peak1), color="blue") +
+  geom_vline(data1=data, aes(xintercept = doy_peakmean), color="orange") +
+  scale_x_continuous(limits = c(214, 312)) + 
+   ylab("Average Daily %") +
+  xlab("Day of Year") +
+  theme_classic()
+
+```
+
+Plot raw monarch counts at the Tip for visual inspection of migration peaks, weighted mean migration day and sd.
+
+```{r PlotRawCounts}
+
+#Historgram of observation counts are very zero inflated
+ggplot(data, aes(x=ObservationCount)) + 
+  geom_histogram(binwidth=.25, colour="black", fill="white")
+
+data1<-merge(data, LPBO1, by = "survey_year")
+data1<-data1 %>% mutate(quant90 = ifelse(survey_year==2014, NA, quant90))
+data1<-data1 %>% mutate(quant90 = ifelse(survey_year==2019, NA, quant90))
+data1<-as.data.frame(data1)
+
+#Plot raw counts, each year separate
+data1<-data1 %>% mutate(Obs1=ObservationCount+1)
+ggplot(data1, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  geom_vline(data1=data, aes(xintercept = mean.date), color="red") +
+  geom_vline(data1=data, aes(xintercept = quant90), color="blue") +
+  scale_x_continuous(limits = c(209, 317)) + 
+  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw monarch counts (log scale)") +
+  xlab("Day of year") +
+  theme_classic()+
+  theme(text=element_text(size=20))
+
+#Plot raw counts, pool all years
+ggplot(data, aes(x=doy, y=ObservationCount)) +
+  geom_point() +
+  ylab("Raw Counts") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+#Plot weighted mean date of migration +-sd
+#Redundant to plot above
+ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
+  geom_point() +
+  geom_ribbon(aes(ymin = sd.low, ymax = sd.high), alpha = 0.2)+
+  theme_classic()+
+  ylab("Survey year") +
+  xlab("Weighted mean passage dates (DOY)") +
+  theme(text=element_text(size=20))
+
+
+```
+
+## Weather data access Monthly Averages 
+
+Data come from the NCEP/NCAR Reanalysis (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis.html) 
+and NCEP/DOE Reanalysis II (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis2.html) datasets. 
+
+Note that variables on a T62 Gaussian grid are evenly spaced in longitude but unevenly spaced in latitude. All data are downloaded on the gaussian grid for compariative purposes. 
+  
+Date range 1995-2020
+Month range July-October (7,10)
+Lat Long coordinates cover the Great Lakes Shoreline associated with MOBU counts from Long Point and surrounding area
+
+Zipf 2017: Total Monthly Precipitation, Average Monthly Temperature, Average min daily temp 
+
+Bounding box: northeast Ottawa to tip of the Bruce in the northwest, down to LPBO in the south 
+
+#Air temp monthly average RNCEP
+```{r temp}
+
+#Import saved summary data
+#air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
+
+air_temp <- NCEP.gather(variable = 'air.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean air temperature on a given day. 
+air_temp_mean <- NCEP.aggregate(wx.data=air_temp, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_temp_mean <- NCEP.array2df(air_temp_mean, var.names=NULL)
+
+#Change temperature into degree C and create year, month, day columns
+air_temp_summary <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	       separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = air_temp_mean) %>%
+         rename(June_temp = "6", July_temp = "7", August_temp = "8", September_temp = "9", October_temp = "10") %>%
+         mutate(Year=as.numeric(Year)) %>% 
+         mutate (Summer_temp = rowMeans(select(., 3:5))) #average summer temp June-Aug
+
+air_temp_summary_vis <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+ggplot(air_temp_summary_vis, aes(x=year, y=air_temp_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+#save temperature data
+write.csv(air_temp_summary,"Mean.Monthly.Temp.csv")
+air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
+
+```  
+
+
+#Air temp average monthly minimum
+```{r tempmin}
+
+#Import saved summary data
+#air_min_summary<-read.csv("Min.Monthly.Temp.csv")
+
+air_min <- NCEP.gather(variable = 'tmin.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean min air temperature on a given day. 
+air_min_mean <- NCEP.aggregate(wx.data=air_min, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_min_mean <- NCEP.array2df(air_min_mean, var.names=NULL)
+
+#Change temperature into degree C and create year, month, day columns
+air_min_summary <- air_min_mean %>%
+         mutate(air_min_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_min_mean=mean(air_min_mean)) %>%
+	       separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = air_min_mean) %>%
+         rename(June_tmin = "6", July_tmin = "7", August_tmin = "8", September_tmin = "9", October_tmin = "10") %>%
+         mutate(Year=as.numeric(Year))
+
+air_min_summary_vis <- air_min_mean %>%
+         mutate(air_min_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_min_mean=mean(air_min_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+ggplot(air_min_summary_vis, aes(x=year, y=air_min_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+#save temperature data
+write.csv(air_min_summary,"Min.Monthly.Temp.csv")
+air_min_summary<-read.csv("Min.Monthly.Temp.csv")
+
+```  
+
+
+#Total (sum) monthly precipitation RNCEP
+```{r precipitation}
+
+#Import saved summary data
+#precip_summary<-read.csv("Sum.Monthly.Precip.csv")
+
+precip <- NCEP.gather(variable = 'prate.sfc', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+precip_sum<- NCEP.aggregate(wx.data=precip, HOURS=FALSE, fxn='sum')
+
+precip_sum <- NCEP.array2df(precip_sum, var.names=NULL)
+
+precip_summary <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = precip_mean) %>%
+         rename(June_precip = "6", July_precip = "7", August_precip = "8", September_precip = "9", October_precip = "10") %>%
+         mutate(Year = as.numeric(Year)) %>% 
+         mutate (Summer_precip = rowMeans(select(., 3:5))) #average summer precip June-Aug
+
+precip_summary_vis <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+
+ggplot(precip_summary_vis, aes(x=year, y=precip_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+#save precipitation data
+write.csv(precip_summary,"Sum.Monthly.Precip.csv")
+precip_summary <-read.csv("Sum.Monthly.Precip.csv")
+```
+
+
+##Combine weather covariates into one table
+
+```{r combine weather}
+
+cov<-merge(air_temp_summary, precip_summary, by=c("Year"))
+cov<-merge(cov, air_min_summary, by=c("Year"))
+
+```
+
+##Combine weather covariates and annual index of abundance with monarch response table
+
+```{r combine response}
+
+dat<-merge(LPBO1, cov, by.x="survey_year", by.y="Year")
+#dat<-merge(dat, index, by.x="survey_year", by.y="year")
+
+write.csv(dat, "Monarch.data.2021.csv")
+#MOBU_dat<-read.csv("Monarch.data.2021.csv")
+
+
+
+```
+
+## Weather data access daily for climwin Analysis
+
+Data come from the NCEP/NCAR Reanalysis (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis.html) 
+and NCEP/DOE Reanalysis II (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis2.html) datasets. 
+
+Note that variables on a T62 Gaussian grid are evenly spaced in longitude but unevenly spaced in latitude. All data are downloaded on the gaussian grid for compariative purposes. 
+  
+Date range 1995-2020
+Month range July-October (7,10)
+Lat Long coordinates cover the Great Lakes Shoreline associated with MOBU counts from Long Point and surrounding area
+
+Zipf 2017: Total Monthly Precipitation, Average Monthly Temperature, Average min daily temp 
+
+Bounding box: northeast Ottawa to tip of the Bruce in the northwest, down to LPBO in the south 
+
+#Air temp daily mean
+```{r tempmin}
+
+air <- NCEP.gather(variable = 'tmin.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean min air temperature on a given day. 
+air_mean <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_mean <- NCEP.array2df(air_mean, var.names=NULL)
+
+air_mean <- air_mean %>%
+         mutate(air_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime))) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_mean=mean(air_mean))
+
+air_mean$date <- format(air_mean$datetime, format="%d/%m/%Y")
+air_mean$date<-as.factor(air_mean$date)
+
+write.csv(air_mean, "Daily mean air temp.csv")
+```  
+
+#Air temp daily min
+```{r tempmin}
+
+#Calculate the mean min air temperature on a given day. 
+air_min <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='min')
+
+#Change data from an array into a dateframe
+air_min <- NCEP.array2df(air_min, var.names=NULL)
+
+air_min_mean <- air_min %>%
+         mutate(min_temp = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)))%>% 
+         select(-variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_min=mean(min_temp))
+
+air_min_mean$date <- format(air_min_mean$datetime, format="%d/%m/%Y")
+air_min_mean$date<-as.factor(air_min_mean$date)
+
+write.csv(air_min_mean, "Daily min air temp.csv")
+``` 
+
+#Air temp daily max
+```{r tempmin}
+
+#Calculate the mean min air temperature on a given day. 
+air_max <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='max')
+
+#Change data from an array into a dateframe
+air_max <- NCEP.array2df(air_max, var.names=NULL)
+
+air_max_mean <- air_max %>%
+         mutate(max_temp = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)))%>% 
+         select(-variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_max=mean(max_temp))
+
+air_max_mean$date <- format(air_max_mean$datetime, format="%d/%m/%Y")
+air_max_mean$date<-as.factor(air_max_mean$date)
+
+write.csv(air_max_mean, "Daily max air temp.csv")
+``` 
+
+#Total (sum) daily precipitation RNCEP
+```{r precipitation}
+
+precip <- NCEP.gather(variable = 'prate.sfc', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+precip_sum<- NCEP.aggregate(wx.data=precip, HOURS=FALSE, fxn='sum')
+
+precip_sum <- NCEP.array2df(precip_sum, var.names=NULL)
+
+precip_sum <- precip_sum %>%
+         mutate(precip_tot = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime))) %>%
+         select( -variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(precip_sum=mean(precip_tot))
+
+precip_sum$date <- format(precip_sum$datetime, format="%d/%m/%Y")
+precip_sum$date<-as.factor(precip_sum$date)
+
+#save precipitation data
+write.csv(precip_sum,"Daily tot precip.csv")
+
+```
+
+```{r merge weather}
+
+cov<-merge(air_mean, air_max_mean, by=c("datetime", "date"))
+cov<-merge(cov, air_min_mean, by=c("datetime", "date"))
+cov<-merge(cov, precip_sum, by=c("datetime", "date"))
+
+```
+
+#Caculate growing degree days and daily temperature varaibility (difference between daily high and low)
+
+```{r GDD}
+cov<-cov %>% mutate(doy=yday(datetime))
+
+cov$gdd<-gdd(tmax=cov$air_max, tmin=cov$air_min, tbase=11, tbase_max = 33, type="D")
+
+cov<-cov %>% mutate(air_var=air_max-air_min)
+
+```
+
+
+```{r write weather}
+
+write.csv(cov, "Daily weather.csv")
+
+```
+

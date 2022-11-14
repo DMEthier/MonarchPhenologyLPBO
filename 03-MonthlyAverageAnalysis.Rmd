@@ -1,0 +1,240 @@
+---
+title: "02-DataAnalysis"
+author: "Danielle Ethier"
+date: "22/06/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+##Monarch fall migration analysis 2021. This script is written to be stand alone from the 01-DataManip script, which is used for data download and cleaning. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages}
+
+require(tidyverse)  
+require(psych)
+require(mgcv)
+require(lmtest)
+require(Hmisc)
+
+detach("package:plyr", unload=TRUE) #if this was previously loaded it will cause a headache. 
+
+#Pacakge to check model assumptions
+#https://twitter.com/rfunctionaday/status/1413719791114854406
+ 
+```
+
+##Import data
+
+```{r import data}
+
+dat<-read.csv("Monarch.data.2021.csv")
+
+dat<-dat %>% select(survey_year, mean.date, weighted.sd, quant90, doy_abund50, doy_peak1, doy_peakmean, June_temp, July_temp, August_temp, September_temp, October_temp, Summer_temp, June_tmin, July_tmin, August_tmin, September_tmin, October_tmin, Summer_temp, June_precip, July_precip, August_precip, September_precip, October_precip, Summer_precip)
+
+```
+
+##Peason correlation of response and predictor variables
+```{r corr}
+
+corr_response <- dat[, 2:7]
+# Plot correlation matrix
+pairs(corr_response)
+cor(corr_response)
+psych::pairs.panels(corr_response)
+rcorr(as.matrix(corr_response),type="pearson")
+
+corr_predict <- dat[, 8:24]
+# Plot correlation matrix
+pairs(corr_predict)
+cor(corr_predict)
+psych::pairs.panels(corr_predict)
+
+cor.test(dat$Summer_temp, dat$June_temp)
+cor.test(dat$Summer_temp, dat$July_temp)
+cor.test(dat$Summer_temp, dat$August_temp)
+
+#Average summer temperature correlation with June, July, and August temps. Further, mean temp is correlated with min temp. Therefore, they will be removed from the analysis
+dat<-dat %>% select(-Summer_temp, -June_tmin, -July_tmin, -August_tmin, -September_tmin, -October_tmin)
+
+```
+
+##Explore the distribution of the response varaible to know what model distribution is more appropraite
+```{r response distribution}
+
+hist(dat$mean.date)
+hist(dat$weighted.sd)
+hist(dat$quant90)
+hist(dat$doy_abund50)
+hist(dat$doy_peak1)
+hist(dat$doy_peakmean)
+
+#These are all close enough to normally distributed to use a linear model 
+
+```
+
+
+Models developed using the methods proposed in Tredennick et al. 2021
+
+```{r analysis Tredennick et al. 2021}
+
+dat<-dat %>% select(survey_year, mean.date, weighted.sd, quant90, doy_abund50, doy_peak1, doy_peakmean, June_temp, July_temp, August_temp, September_temp, October_temp, June_precip, July_precip, August_precip, September_precip) %>% mutate_at(c("June_temp", "July_temp", "August_temp", "September_temp", "October_temp", "June_precip", "July_precip", "August_precip", "September_precip"), ~(scale(.) %>% as.vector))
+
+mean<-dat %>% select(-weighted.sd, -quant90, -doy_abund50, -doy_peak1, -doy_peakmean)
+pairs(mean)
+cor(mean)
+psych::pairs.panels(mean)
+#October temp was correlated > 0.3, this is consistent with the global model above. 
+
+#Weighted Means
+mean_full<-lm(mean.date~October_temp+survey_year, data=mean)
+summary(mean_full)#lm + year not significant
+plot(mean_full)
+drop1(mean_full, test="Chisq")
+
+#Also look at autocorrelation in residuals
+res = mean_full$res 
+n = length(res) 
+mod2 = lm(res[-n] ~ res[-1]) 
+summary(mod2) #there is no significant temporal autocorrelation
+
+#Weighted SD
+sd<-dat %>% select(-mean.date, -quant90, -doy_abund50, -doy_peak1, -doy_peakmean)
+pairs(sd)
+cor(sd)
+psych::pairs.panels(sd)
+#June temp, August precip, > 0.3
+
+sd_full<-lm(weighted.sd~June_temp+August_precip+survey_year, data=sd)
+summary(sd_full)
+plot(sd_full)
+drop1(sd_full, test="Chisq") #Index significant
+
+#90th percentile
+p90<-dat %>% select(-mean.date, -weighted.sd, -doy_abund50, -doy_peak1, -doy_peakmean)
+pairs(p90)
+cor(p90)
+psych::pairs.panels(p90)
+#September temp was correlated > 0.3, this is consistent with the global model
+
+p90_full<-lm(quant90~September_temp+survey_year, data=p90)
+summary(p90_full) #September temp significant
+plot(p90_full)
+drop1(p90_full, test="Chisq")
+
+#look at autocorrelation in residuals
+res = p90_full$res 
+n = length(res) 
+mod2 = lm(res[-n] ~ res[-1]) 
+summary(mod2) #there is no significant temporal autocorrelations
+
+#plot significant results (quant90)
+ggplot(p90, aes (x=September_temp, y=quant90)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Late season passage (90th quantile)") +
+  xlab("September temperature (C)") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#50% abund passage 
+abund<-dat %>% select(-mean.date, -weighted.sd, -quant90, -doy_peak1, -doy_peakmean)
+pairs(abund)
+cor(abund)
+psych::pairs.panels(abund)
+#October temp was correlated > 0.3
+
+abund_m<-lm(doy_abund50~October_temp+survey_year, data=abund)
+summary(abund_m) #October temp not significant
+drop1(abund_m, test="Chisq")
+
+#first peak passage 
+peak<-dat %>% select(-mean.date, -weighted.sd, -quant90, -doy_abund50, -doy_peakmean)
+pairs(peak)
+cor(peak)
+psych::pairs.panels(peak)
+#October temp was correlated > 0.3
+
+peak_m<-lm(doy_peak1~October_temp+survey_year, data=peak)
+summary(peak_m) #October temp not significant
+drop1(peak_m, test="Chisq")
+
+#mean peak passage 
+meanpeak<-dat %>% select(-mean.date, -weighted.sd, -quant90, -doy_abund50, -doy_peak1)
+pairs(meanpeak)
+cor(meanpeak)
+psych::pairs.panels(meanpeak)
+#October temp was correlated > 0.3
+
+peak_m2<-lm(doy_peakmean~October_temp+survey_year, data=meanpeak)
+summary(peak_m2) #October temp not significant, but close at 0.03 
+drop1(peak_m2, test="Chisq")
+
+
+```
+
+Plot response over time
+
+```{r plot}
+
+#plot mean.data with time
+ggplot(dat, aes (x=survey_year, y=mean.date)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Mean passage (weighted)") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#plot sd. weighted with time
+ggplot(dat, aes (x=survey_year, y=weighted.sd)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Standard deviation (weighted)") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#plot mean.passage 50% with time
+ggplot(dat, aes (x=survey_year, y=doy_abund50)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Midpoint passage (50 percent)") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#plot doy_peak1 with time
+ggplot(dat, aes (x=survey_year, y=doy_peak1)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("First peak day") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#plot doy_peakmean with time
+ggplot(dat, aes (x=survey_year, y=doy_peakmean)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Average peak day") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+#plot quant90 with time
+ggplot(dat, aes (x=survey_year, y=quant90)) +
+  geom_point() +
+  geom_smooth(method ="lm", colour="black", size=0.5) + 
+  ylab("Late passage (90th percentile)") +
+  xlab("Year") +
+  theme(text=element_text(size=20))+
+  theme_classic()
+
+```
